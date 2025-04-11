@@ -1,67 +1,88 @@
 // SPDX-License-Identifier: SEE LICENSE IN LICENSE
 pragma solidity ^0.8.7;
 
-import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/vrf/interfaces/VRFCoordinatorV2Interface.sol";
-import {VRFConsumerBaseV2} from "@chainlink/contracts/src/v0.8/vrf/VRFConsumerBaseV2.sol";
-import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
+import {VRFV2WrapperConsumerBase} from "@chainlink/contracts/src/v0.8/vrf/VRFV2WrapperConsumerBase.sol";
+import {LinkTokenInterface} from "@chainlink/contracts/src/v0.8/shared/interfaces/LinkTokenInterface.sol";
+import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
+import "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
 
-contract VRFv2Consumer is VRFConsumerBaseV2, ConfirmedOwner {
-    constructor(
-        uint64 subscriptionId
-    )
-        VRFConsumerBaseV2(0x8103B0A8A00be2DDC778e6e7eaa21791Cd364625)
-        ConfirmedOwner(msg.sender)
-    {
-        COORDINATOR = VRFCoordinatorV2Interface(
-            0x8103B0A8A00be2DDC778e6e7eaa21791Cd364625
-        );
-        s_subscriptionId = subscriptionId;
-    }
+error Random_IPFS_OUT_OF_BOUND();
+error IPFS_moreEthToBeSent();
+error TransferFailed();
 
+contract RandomNft is
+    VRFV2WrapperConsumerBase,
+    ERC721URIStorage,
+    ConfirmedOwner
+{
     event RequestSent(uint256 requestId, uint32 numWords);
-    event RequestFulfilled(uint256 requestId, uint256[] randomWords);
+    event RequestFulfilled(
+        uint256 requestId,
+        uint256[] randomWords,
+        uint256 payment
+    );
+    event nft_minted();
 
     struct RequestStatus {
+        uint256 paid;
         bool fulfilled;
-        bool exists;
         uint256[] randomWords;
     }
     mapping(uint256 => RequestStatus) public s_requests;
-    VRFCoordinatorV2Interface COORDINATOR;
 
-    uint64 s_subscriptionId;
-
+    uint8 private immutable i_MAX_CHANCE_VALUE;
     uint256[] public requestIds;
     uint256 public lastRequestId;
+    uint256 public immutable i_mintFee;
 
-    bytes32 keyHash =
-        0x474e34a077df58807dbe9c96d3c009b23b3c6d0cce433e59bbf5b34f823bc56c;
+    enum Dogbreed {
+        PUG,
+        SHIBA_INU,
+        ST_BERNARD
+    }
 
     uint32 callbackGasLimit = 100000;
-
     uint16 requestConfirmations = 3;
+    uint32 numWords = 1;
+    address linkAddress = 0x779877A7B0D9E8603169DdbD7836e478b4624789;
+    address wrapperAddress = 0xab18414CD93297B0d12ac29E63Ca20f515b3DB46;
+    uint256 public s_TokenCounter;
+    string[3] internal s_dogTokenUris;
 
-    uint32 numWords = 2;
+    mapping(uint256 => address) public s_requestIdToSender;
 
-    function requestRandomWords()
-        external
-        onlyOwner
-        returns (uint256 requestId)
+    constructor(
+        string[3] memory dogTokenUris,
+        uint256 mintFee,
+        address owner
+    )
+        VRFV2WrapperConsumerBase(linkAddress, wrapperAddress)
+        ERC721("RandomNft", "RIN")
+        ConfirmedOwner(owner)
     {
-        requestId = COORDINATOR.requestRandomWords(
-            keyHash,
-            s_subscriptionId,
-            requestConfirmations,
+        s_dogTokenUris = dogTokenUris;
+        i_mintFee = mintFee;
+    }
+
+
+
+    function requestNft() public payable returns (uint256 requestId) {
+        if (msg.value < i_mintFee) {
+            revert IPFS_moreEthToBeSent();
+        }
+        requestId = requestRandomness(
             callbackGasLimit,
+            requestConfirmations,
             numWords
         );
         s_requests[requestId] = RequestStatus({
+            paid: VRF_V2_WRAPPER.calculateRequestPrice(callbackGasLimit),
             randomWords: new uint256[](0),
-            exists: true,
             fulfilled: false
         });
         requestIds.push(requestId);
         lastRequestId = requestId;
+        s_requestIdToSender[requestId] = msg.sender;
         emit RequestSent(requestId, numWords);
         return requestId;
     }
@@ -70,21 +91,71 @@ contract VRFv2Consumer is VRFConsumerBaseV2, ConfirmedOwner {
         uint256 _requestId,
         uint256[] memory _randomWords
     ) internal override {
-        require(s_requests[_requestId].exists, "request not found");
+        require(s_requests[_requestId].paid > 0, "request not found");
         s_requests[_requestId].fulfilled = true;
         s_requests[_requestId].randomWords = _randomWords;
-        emit RequestFulfilled(_requestId, _randomWords);
+        address dogOwner = s_requestIdToSender[_requestId];
+        uint256 newTokenId = s_TokenCounter;
+        uint8 moddedRng = uint8(_randomWords[0] % i_MAX_CHANCE_VALUE);
+        Dogbreed breed = getBreedFromModdedRng(moddedRng);
+        _safeMint(dogOwner, newTokenId);
+        _setTokenURI(newTokenId, s_dogTokenUris[uint256(breed)]);
+        emit nft_minted();
+        emit RequestFulfilled(
+            _requestId,
+            _randomWords,
+            s_requests[_requestId].paid
+        );
     }
 
-    function requestNft() public {}
+    function getBreedFromModdedRng(
+        uint8 moddedRng
+    ) public view returns (Dogbreed) {
+        uint256 cumulativeSum = 0;
+        uint8[3] memory chanceArray = getChanceArray();
+        for (uint256 i = 0; i < chanceArray.length; i++) {
+            if (
+                moddedRng >= cumulativeSum &&
+                moddedRng < cumulativeSum + chanceArray[i]
+            ) {
+                return Dogbreed(i);
+            }
+            cumulativeSum += chanceArray[i];
+        }
+        revert Random_IPFS_OUT_OF_BOUND();
+    }
 
-    function tokenURI(uint256) public view returns (string memory) {}
+    function getChanceArray() public view returns (uint8[3] memory) {
+        return [10, 30, i_MAX_CHANCE_VALUE];
+    }
 
-    function getRequestStatus(
-        uint256 _requestId
-    ) external view returns (bool fulfilled, uint256[] memory randomWords) {
-        require(s_requests[_requestId].exists, "request not found");
-        RequestStatus memory request = s_requests[_requestId];
-        return (request.fulfilled, request.randomWords);
+    function withdraw() public onlyOwner {
+        uint256 amount = address(this).balance;
+        (bool success, ) = payable(msg.sender).call{value: amount}("");
+        if (!success) {
+            revert TransferFailed();
+        }
+    }
+
+    function withdrawLink() public onlyOwner {
+        LinkTokenInterface link = LinkTokenInterface(linkAddress);
+        require(
+            link.transfer(msg.sender, link.balanceOf(address(this))),
+            "Unable to transfer"
+        );
+    }
+
+    function getMintFee() public view returns (uint256) {
+        return i_mintFee;
+    }
+
+    function getDogTokenUris(
+        uint256 index
+    ) public view returns (string memory) {
+        return s_dogTokenUris[index];
+    }
+
+    function getTokenCounter() public view returns (uint256) {
+        return s_TokenCounter;
     }
 }
