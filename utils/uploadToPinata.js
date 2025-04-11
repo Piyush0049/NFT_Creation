@@ -1,39 +1,58 @@
-const { PinataSDK } = require("pinata")
+const pinataSDK = require("@pinata/sdk")
 const fs = require("fs")
-const { Blob } = require("buffer")
 const path = require("path")
 require("dotenv").config()
 
-const pinata = new PinataSDK({
-  pinataJwt: process.env.PINATA_JWT,
-  pinataGateway: process.env.GATEWAY_URL
-})
+const pinataApiKey = process.env.PINATA_API_KEY || ""
+const pinataApiSecret = process.env.PINATA_API_SECRET || ""
+const pinata = new pinataSDK(pinataApiKey, pinataApiSecret)
 
-async function uploadFolder(filepath){
-  try {
-    const files = fs.readdirSync("./images/random");
-    const folderPath = path.resolve(filepath);
-    const blob = new Blob([fs.readdirSync("./images/random")]);
-    const file = new File([blob], "images", { type: "text/plain"})
-    const upload = await pinata.upload.public.file(file);
-    console.log("Uploading To IPFS...")
-    let responses = [];
-    for(fileindex in files){
-        const readableimage = fs.createReadStream(`${folderPath}/${files[fileindex]}`);
+async function uploadFiles(imagesFilePath) {
+    const fullImagesPath = path.resolve(imagesFilePath)
+
+    // Filter the files in case there's a file that in not a .png, .jpg or .jpeg
+    const files = fs.readdirSync(fullImagesPath).filter((file) => (/\b.png|\b.jpg|\b.jpeg/).test(file))
+
+    const responses = []
+    console.log("Uploading to IPFS...")
+
+    for (const fileIndex in files) {
+        const readableStreamForFile = fs.createReadStream(`${fullImagesPath}/${files[fileIndex]}`)
+        const options = {
+            pinataMetadata: {
+                name: files[fileIndex],
+            },
+        }
         try {
-            const response = await PinataSDK.pinFileToIpfs(readableimage);
-            responses.push(response);
+            await pinata
+                .pinFileToIPFS(readableStreamForFile, options)
+                .then((result) => {
+                    responses.push(result)
+                })
+                .catch((err) => {
+                    console.log(err)
+                })
         } catch (error) {
-            console.error(error)
+            console.log(error)
         }
     }
-    console.log(files)
-    console.log(upload)
-  } catch (error) {
-    console.log(error)
-  }
+    return { responses, files }
 }
 
-module.exports = {
-    uploadFolder
+async function storeTokenUriMetadata(metadata) {
+    const options = {
+        pinataMetadata: {
+            name: metadata.name,
+        },
+    }
+    console.log("metadata : ", metadata)
+    try {
+        const response = await pinata.pinJSONToIPFS(metadata, options)
+        return response
+    } catch (error) {
+        console.log(error)
+    }
+    return null
 }
+
+module.exports = { uploadFiles, storeTokenUriMetadata }
