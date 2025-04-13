@@ -10,7 +10,7 @@ const networkConfig = {
       "91546372465876843905762096909685071615158347404357919444137868504617160605776",
     callbackGasLimit: "500000",
     interval: 60,
-    mintFee : "",
+    mintFee : "10000000000000000",
   },
   31337: {
     name: "hardhat",
@@ -19,7 +19,7 @@ const networkConfig = {
       "0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae",
     callbackGasLimit: "500000",
     interval: 60,
-    mintFee : "",
+    mintFee : "10000000000000000",
   },
 };
 

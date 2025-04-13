@@ -100,6 +100,8 @@ contract RandomNft is
         Dogbreed breed = getBreedFromModdedRng(moddedRng);
         _safeMint(dogOwner, newTokenId);
         _setTokenURI(newTokenId, s_dogTokenUris[uint256(breed)]);
+        _setTokenURI(newTokenId, s_dogTokenUris[uint256(breed)]);
+        s_TokenCounter++;
         emit nft_minted();
         emit RequestFulfilled(
             _requestId,
